@@ -4,74 +4,152 @@ import cv2
 import numpy as np
 import os
 import requests
-from tqdm import tqdm
+from PIL import Image
+from io import BytesIO
 
-# We can now import these directly because requirements.txt will install compatible versions
+# We can now import these directly because requirements.txt is configured correctly
 from realesrgan import RealESRGANer
 from basicsr.archs.rrdbnet_arch import RRDBNet
 
 # --- App UI Configuration ---
-st.set_page_config(layout="wide", page_title="AI Image Enhancer")
-st.title("🖼️ AI-Powered Image Super-Resolution")
-st.info("Upload a low-resolution image to see it enhanced in real-time using a pre-trained Real-ESRGAN model.")
+st.set_page_config(
+    layout="wide",
+    page_title="AI Image Enhancer",
+    page_icon="✨"
+)
+
+# --- NEW: Custom CSS to replicate Hugging Face's aesthetic ---
+# This injects CSS to center the main content block and give it a max-width
+st.markdown("""
+    <style>
+        .block-container {
+            max-width: 900px;
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+        }
+        .st-emotion-cache-16txtl3 {
+            padding-top: 2rem;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 # --- Model & File Configuration ---
 MODEL_URL = 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth'
 MODEL_NAME = 'RealESRGAN_x4plus.pth'
 
-# --- Function to download the model file manually ---
-def download_model(url, model_name):
-    if not os.path.exists(model_name):
-        st.info(f"Downloading the AI model ({model_name})... This may take a moment.")
-        try:
-            response = requests.get(url, stream=True)
-            response.raise_for_status()
-            total_size = int(response.headers.get('content-length', 0))
-            block_size = 1024
-            progress_bar = st.progress(0)
-            with open(model_name, 'wb') as f:
-                for data in response.iter_content(block_size):
-                    f.write(data)
-                    progress_bar.progress(f.tell() / total_size)
-            progress_bar.empty()
-            st.success("Model downloaded successfully!")
-        except requests.exceptions.RequestException as e:
-            st.error(f"Error downloading model: {e}")
-            st.stop()
+# --- NEW: Example Images ---
+EXAMPLE_IMAGES = {
+    "Baboon": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/master/assets/baboon.png",
+    "Comic": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/master/assets/comic.png",
+    "Cat": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/master/assets/cat_lq.jpg",
+}
 
-# --- Model Loading (with caching) ---
+# --- Cached Functions for Model Loading and Downloads ---
 @st.cache_resource
 def load_model():
+    """Loads the pre-trained Real-ESRGAN model. This is cached for performance."""
     model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
     device = torch.device("cpu")
     upsampler = RealESRGANer(
-        scale=4,
-        model_path=MODEL_NAME,
-        model=model, device=device, tile=0, tile_pad=10, pre_pad=0, half=False)
+        scale=4, model_path=MODEL_NAME, model=model,
+        device=device, tile=0, tile_pad=10, pre_pad=0, half=False
+    )
     return upsampler
 
-# --- Main App Logic ---
-download_model(MODEL_URL, MODEL_NAME)
+@st.cache_data
+def download_file(url, file_name):
+    """Downloads a file from a URL, used for both the model and examples."""
+    if not os.path.exists(file_name):
+        try:
+            response = requests.get(url, stream=True)
+            response.raise_for_status()
+            with open(file_name, 'wb') as f:
+                for data in response.iter_content(1024):
+                    f.write(data)
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error downloading file: {e}")
+            return None
+    return file_name
+
+# --- Main App Interface ---
+st.title("✨ Real-ESRGAN Image Super-Resolution")
+st.markdown(
+    "This demo uses **Real-ESRGAN** to enhance low-resolution images. "
+    "Upload your own image or try one of the examples below to see the AI in action."
+)
+st.write("---")
+
+# Main app logic starts here
+download_file(MODEL_URL, MODEL_NAME)
 upsampler = load_model()
 
-# --- Image Uploader and Processing Logic ---
-uploaded_file = st.file_uploader("Choose an image to enhance...", type=["jpg", "jpeg", "png"])
+# --- NEW: Clickable Examples Section ---
+st.subheader("Try an Example")
+example_cols = st.columns(len(EXAMPLE_IMAGES))
+# This dictionary will hold the image bytes for processing
+image_to_process = None
 
-if uploaded_file is not None:
-    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    input_image = cv2.imdecode(file_bytes, 1)
+for col, (name, url) in zip(example_cols, EXAMPLE_IMAGES.items()):
+    with col:
+        st.image(url, use_column_width=True)
+        if st.button(f"Use {name}", use_container_width=True):
+            # Download the example image and prepare it for processing
+            st.toast(f"Loading '{name}' example...")
+            image_bytes = requests.get(url).content
+            image_to_process = image_bytes # Store the bytes
+
+# --- File Uploader ---
+st.subheader("Upload Your Own Image")
+uploaded_file = st.file_uploader(
+    "Choose a low-resolution JPG or PNG file",
+    type=["jpg", "jpeg", "png"]
+)
+
+if uploaded_file:
+    image_to_process = uploaded_file.getvalue()
+
+# --- Processing and Displaying Results ---
+if image_to_process:
     st.write("---")
-    with st.spinner('AI is enhancing your image... This can take up to 30 seconds.'):
+    st.subheader("Results")
+
+    # Convert image bytes to a NumPy array for OpenCV
+    file_bytes = np.asarray(bytearray(image_to_process), dtype=np.uint8)
+    input_image = cv2.imdecode(file_bytes, 1)
+
+    with st.spinner('The AI is working its magic...'):
         output_image, _ = upsampler.enhance(input_image, outscale=4)
-    st.header("Results")
+
+    # Display results
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("Original Image")
-        # --- THIS LINE IS FIXED ---
-        st.image(cv2.cvtColor(input_image, cv2.COLOR_BGR2RGB), width="stretch")
+        st.caption("Original Image")
+        st.image(cv2.cvtColor(input_image, cv2.COLOR_BGR2RGB), use_column_width=True)
     with col2:
-        st.subheader("Enhanced Image")
-        # --- THIS LINE IS FIXED ---
-        st.image(cv2.cvtColor(output_image, cv2.COLOR_BGR2RGB), width="stretch")
-else:
-    st.warning("Please upload an image to get started.")
+        st.caption("Enhanced Image")
+        st.image(cv2.cvtColor(output_image, cv2.COLOR_BGR2RGB), use_column_width=True)
+
+        # Download Button
+        result_bytes = cv2.imencode('.png', output_image)[1].tobytes()
+        file_name = "enhanced_image.png"
+        if uploaded_file: # Use original filename if available
+            file_name = f"enhanced_{uploaded_file.name}"
+        
+        st.download_button(
+            label="⬇️ Download Enhanced Image",
+            data=result_bytes,
+            file_name=file_name,
+            mime="image/png"
+        )
+
+# --- NEW: Footer Section ---
+st.write("---")
+st.markdown(
+    """
+    <div style="text-align: center; font-size: 0.9em;">
+        <p><strong>Model:</strong> <a href="https://github.com/xinntao/Real-ESRGAN" target="_blank">Real-ESRGAN</a> by xinntao</p>
+        <p><strong>App built with:</strong> <a href="https://streamlit.io" target="_blank">Streamlit</a></p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
