@@ -25,9 +25,6 @@ st.markdown("""
             padding-top: 2rem;
             padding-bottom: 2rem;
         }
-        .st-emotion-cache-16txtl3 {
-            padding-top: 2rem;
-        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -51,7 +48,6 @@ def load_model():
 def download_model(url, file_name):
     """Downloads the model file from a URL if it doesn't exist."""
     if not os.path.exists(file_name):
-        st.info(f"Downloading the AI model ({file_name})... This may take a moment on first startup.")
         try:
             response = requests.get(url)
             response.raise_for_status()
@@ -65,14 +61,10 @@ def download_model(url, file_name):
 # --- Main App Interface ---
 st.title("✨ Real-ESRGAN Image Super-Resolution")
 st.markdown(
-    "This demo uses **Real-ESRGAN** to enhance low-resolution images. "
-    "Upload a JPG, JPEG, or PNG file to see the AI increase its resolution by 4x."
+    "Upload a JPG, JPEG, or PNG file to see the AI increase its resolution by 4x. "
+    "The model will be loaded after you upload an image."
 )
 st.write("---")
-
-# Main app logic: ensure model is available, then load it
-download_model(MODEL_URL, MODEL_NAME)
-upsampler = load_model()
 
 # --- File Uploader and Main Processing Logic ---
 st.subheader("Upload Your Image")
@@ -82,25 +74,31 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-    # Process the uploaded file
-    st.write("---")
-    st.subheader("Results")
+    # ---- THIS IS THE NEW "LAZY LOADING" LOGIC ----
+    with st.spinner('Loading AI model and enhancing your image... Please wait.'):
+        # 1. Ensure the model file is downloaded
+        download_model(MODEL_URL, MODEL_NAME)
+        
+        # 2. Load the model (this will be cached after the first time)
+        upsampler = load_model()
 
-    # Convert image to a format OpenCV can read
-    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    input_image = cv2.imdecode(file_bytes, 1)
-
-    with st.spinner('The AI is working its magic... Please wait.'):
+        # 3. Process the uploaded file
+        file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+        input_image = cv2.imdecode(file_bytes, 1)
+        
+        # 4. Enhance the image
         output_image, _ = upsampler.enhance(input_image, outscale=4)
 
     # Display results
+    st.write("---")
+    st.subheader("Results")
     col1, col2 = st.columns(2)
     with col1:
         st.caption("Original Image")
-        st.image(cv2.cvtColor(input_image, cv2.COLOR_BGR2RGB), use_column_width=True)
+        st.image(cv2.cvtColor(input_image, cv2.COLOR_BGR_RGB), use_column_width=True)
     with col2:
         st.caption("Enhanced Image")
-        st.image(cv2.cvtColor(output_image, cv2.COLOR_BGR2RGB), use_column_width=True)
+        st.image(cv2.cvtColor(output_image, cv2.COLOR_BGR_RGB), use_column_width=True)
 
         # Download Button
         result_bytes = cv2.imencode('.png', output_image)[1].tobytes()
@@ -111,7 +109,6 @@ if uploaded_file is not None:
             mime="image/png"
         )
 else:
-    # Initial message when no file is uploaded
     st.info("Please upload an image to get started.")
 
 # --- Footer Section ---
